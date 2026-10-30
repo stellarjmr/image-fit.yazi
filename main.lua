@@ -1,9 +1,11 @@
 --- @since 25.12.29
--- Upscale images to fit the preview area using macOS /usr/bin/sips.
+-- Upscale images to fit the preview area using macOS /usr/bin/sips, and
+-- render PDF pages at the preview area's size using pdftoppm.
 
 local M = {}
 
 local SIPS = "/usr/bin/sips"
+local PDFTOPPM = "pdftoppm"
 
 local function positive_number(value)
 	return type(value) == "number" and value > 0
@@ -218,7 +220,97 @@ local function resize_image(source, w, h, tmp)
 	return nil
 end
 
+local function is_pdf(job)
+	local mime_ok, mime = pcall(function()
+		return job.mime
+	end)
+	if mime_ok and mime == "application/pdf" then
+		return true
+	end
+	local ok, ext = pcall(function()
+		return job.file.url.ext
+	end)
+	return ok and type(ext) == "string" and ext:lower() == "pdf"
+end
+
+local function builtin_pdf(job, method)
+	pcall(function()
+		local pdf = require("pdf")
+		pdf[method](pdf, job)
+	end)
+end
+
+local function render_pdf(source, page, size, prefix)
+	local ok, output = pcall(function()
+		return Command(PDFTOPPM):arg({
+			"-f",
+			tostring(page),
+			"-l",
+			tostring(page),
+			"-singlefile",
+			"-png",
+			"-scale-to",
+			tostring(size),
+			source,
+			prefix,
+		}):output()
+	end)
+	if ok then
+		return output
+	end
+	return nil
+end
+
+local function peek_pdf(job)
+	local source = source_path(file_url(job))
+	if not source then
+		return builtin_pdf(job, "peek")
+	end
+
+	-- Scaling the long side to the larger area dimension renders the page at
+	-- least as large as the area in both directions; image_show downscales.
+	local max_w, max_h = max_pixels(job_area(job))
+	if not positive_number(max_w) or not positive_number(max_h) then
+		return builtin_pdf(job, "peek")
+	end
+
+	local skip = job_skip(job)
+	if type(skip) ~= "number" or skip < 0 then
+		skip = 0
+	end
+
+	local ok, prefix = pcall(function()
+		return os.tmpname()
+	end)
+	if not ok or type(prefix) ~= "string" or prefix == "" then
+		return builtin_pdf(job, "peek")
+	end
+
+	-- Failures, including seeking past the last page, go to Yazi's built-in
+	-- PDF previewer, which reports errors and clamps the page bound.
+	local output = render_pdf(source, math.floor(skip) + 1, math.max(max_w, max_h), prefix)
+	if not output then
+		return builtin_pdf(job, "peek")
+	end
+	local status_ok, status = pcall(function()
+		return output.status
+	end)
+	if not status_ok or not status_success(status) then
+		return builtin_pdf(job, "peek")
+	end
+
+	local rendered = preview_url(prefix .. ".png")
+	if not rendered then
+		return builtin_pdf(job, "peek")
+	end
+	show_image(job, rendered)
+end
+
 function M:peek(job)
+	if is_pdf(job) then
+		return peek_pdf(job)
+	end
+
 	local url = file_url(job)
 	if not url then
 		return show_original(job)
@@ -259,7 +351,11 @@ function M:peek(job)
 	show_image(job, resized)
 end
 
-function M:seek() end
+function M:seek(job)
+	if is_pdf(job) then
+		builtin_pdf(job, "seek")
+	end
+end
 
 local function default_spot(job)
 	local ok, result = pcall(function()
