@@ -11,7 +11,7 @@ and showing it in Yazi.
 
 ## Compatibility
 
-Maintained against Yazi/Ya `26.8.15`.
+Maintained against Yazi/Ya `26.9.1`.
 
 ## Installation
 
