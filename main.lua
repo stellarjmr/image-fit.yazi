@@ -109,7 +109,10 @@ local function safe_image_info(url)
 	local ok, info = pcall(function()
 		return ya.image_info(url)
 	end)
-	if ok and type(info) == "table" then
+	-- Yazi returns image metadata as userdata, so a table-only check would
+	-- send every image down the fallback path.
+	local kind = type(info)
+	if ok and (kind == "userdata" or kind == "table") then
 		return info
 	end
 	return nil
